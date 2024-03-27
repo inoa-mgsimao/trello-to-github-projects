@@ -3,8 +3,8 @@
 ## Instalação
 
 ```bash
-git clone https://github.com/inoa-mgsimao/trello-to-github-projects && \
-cd trello-to-github-projects && \
+git clone https://github.com/inoa-mgsimao/trello-to-github-projects
+cd trello-to-github-projects
 npm i
 ```
 
