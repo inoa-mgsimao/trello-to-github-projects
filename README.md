@@ -36,6 +36,8 @@ const githubProjectNumber = 22; // Número do projeto de Finantial Solutions
 
 No exemplo a seguir, os cards na lista "Doing" no Trello serão inseridos com status "In Progress" no projeto do GitHub.
 
+É recomendável rodar o script 1 coluna por vez. Assim, é mais fácil de acompanhar as mudanças e resolver erros eventuais.
+
 ```js
 const trelloToGithubColumnMap = {
   "Doing": "In Progress",
@@ -92,3 +94,12 @@ O arquivo deve ser nomeado `private-key.pem`.
     ```bash
     node main.js
     ```
+
+## Como o script funciona?
+
+Para cada card das listas informadas:
+
+1. Busca se uma issue com mesmo nome já foi criada previamente pelo script. A issue deve conter o link para o card original do Trello.
+2. Caso não encontre uma issue já criada, cria a issue no repositório informado.
+3. Adiciona a issue no projeto informado.
+4. Muda o campo "Status" da issue para o valor configurado no mapeamento de colunas.
