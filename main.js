@@ -94,7 +94,34 @@ const cards = data.cards
   });
 
 cards.forEach(async card => {
-  // Create issue
+  let issue = await tryGetIssue(card);
+  if (issue) {
+    console.log(`Issue #${issue.number} used for card '${card.name}'.`);
+  }
+
+  if (!issue) {
+    issue = await createIssue(card);
+    console.log(`Issue #${issue.number} created for card '${card.name}'.`);
+  }
+
+  const itemId = await addIssueToProject(issue);
+  console.log(`Issue #${issue.number} added to project. (${itemId})`);
+
+  const status = await setItemStatus(card, itemId);
+  console.log(`Issue #${issue.number} status updated to '${status}'.`);
+});
+
+// Functions
+
+async function tryGetIssue(card) {
+  const searchResult = await octokit.rest.search.issuesAndPullRequests({
+    q: `repo:${githubOrg}/${githubRepository} is:issue author:app/trello-to-github-projects "${card.name}" in:title`,
+  });
+
+  return searchResult.data.items.find(i => i.body.includes(`- [Trello](${card.shortUrl})`));
+}
+
+async function createIssue(card) {
   let body = '';
   if (card.desc.length > 0) {
     body += `${card.desc}\n\n---\n\n`;
@@ -112,7 +139,6 @@ cards.forEach(async card => {
     assignees: card.idMembers.map(id => userDictionary[id]),
     labels: card.labels.map(label => label.name).filter(label => label !== "GitHub"),
   });
-  console.log(`Issue #${issue.data.number} created.`);
 
   // Add comments
   data.actions
@@ -128,15 +154,23 @@ cards.forEach(async card => {
       })
     });
 
-  // Add issue to project
-  const itemId = (await octokit.graphql(`mutation {
-    addProjectV2ItemById(input: {projectId: "${project.id}" contentId: "${issue.data.node_id}"}) {
+  return issue.data;
+}
+
+async function addIssueToProject(issue) {
+  const response = await octokit.graphql(`mutation {
+    addProjectV2ItemById(input: {projectId: "${project.id}" contentId: "${issue.node_id}"}) {
       item {
         id
       }
     }
-  }`)).addProjectV2ItemById.item.id;
-  await octokit.graphql(`mutation {
+  }`);
+  
+  return response.addProjectV2ItemById.item.id;
+}
+
+async function setItemStatus(card, itemId) {
+  const response = await octokit.graphql(`mutation {
     updateProjectV2ItemFieldValue(
       input: {
         projectId: "${project.id}"
@@ -148,8 +182,14 @@ cards.forEach(async card => {
       }
     ) {
       projectV2Item {
-        id
+        fieldValueByName(name: "${githubStatusField}") {
+          ... on ProjectV2ItemFieldSingleSelectValue {
+            name
+          }
+        }
       }
     }
   }`);
-});
+
+  return response.updateProjectV2ItemFieldValue.projectV2Item.fieldValueByName.name;
+}
