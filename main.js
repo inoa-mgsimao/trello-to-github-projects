@@ -85,6 +85,11 @@ const userDictionary = data.members.reduce((acc, member) => {
   return acc;
 }, {});
 
+const checklists = {
+  _: data.checklists,
+  findById: function (id) { return this._.find(c => c.id === id) },
+}
+
 const cards = data.cards
   .filter(card => Object.keys(columnDictionary).includes(card.idList))
   .filter(card => {
@@ -126,6 +131,7 @@ async function createIssue(card) {
   if (card.desc.length > 0) {
     body += `${card.desc}\n\n---\n\n`;
   }
+  body += `${createChecklists(card)}`
   body += `- [Trello](${card.shortUrl})`;
   card.attachments.forEach(attachment => {
     body += `\n- [${attachment.name}](${attachment.url})`;
@@ -192,4 +198,22 @@ async function setItemStatus(card, itemId) {
   }`);
 
   return response.updateProjectV2ItemFieldValue.projectV2Item.fieldValueByName.name;
+}
+
+function createMarkdownChecklist(checklist) {
+  const title = `# ${checklist.name}`
+  const checkItems = checklist?.checkItems.map(ci =>
+    `- [${ci.state === 'complete' ? 'x' : ' '}] ${ci.name}`)
+  
+  return `${title}\n${checkItems.join('\n')}`
+}
+
+function createChecklists(card) {
+  const lists = card.idChecklists
+    .map(id => checklists.findById(id))
+    .map(checklist => createMarkdownChecklist(checklist))
+
+  lists.length && lists.push('')
+
+  return lists.join('\n\n---\n\n')
 }
