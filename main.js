@@ -1,219 +1,290 @@
-import { App } from "octokit";
-import fs from "fs";
-import { exit } from "process";
+import { App } from 'octokit'
+import fs from 'fs'
+import config from './config.js'
 
-const githubRepository = "my-repo";   // CHANGE ME!
-const githubProjectNumber = 0;        // CHANGE ME!
-const trelloToGithubColumnMap = {     // CHANGE ME!
-  "Doing": "In Progress",
-  "Done": "Done",
+let _trelloLists
+let _trelloCards
+
+let _octokit
+let _githubProject
+let _trelloListNameTogithubColumnId = {}
+
+function loadTrelloListsAndCardsFromJson() {
+    const data = JSON.parse(fs.readFileSync(config.trelloJsonFileName, "utf8"))
+
+    let listsMap = {}
+    let labelsMap = {}
+    let membersMap = {}
+    let checkListsMap = {}
+    let customFieldsMap = {}
+    let commentsMap = {}
+
+    data.lists
+        .filter(l => config.trelloToGithubColumnMap[l.name])
+        .filter(l => config.includeArchivedCards || !l.closed)
+        .forEach(l => listsMap[l.id] = l)
+
+    data.members.forEach(m => membersMap[m.id] = m)
+    data.labels.forEach(l => labelsMap[l.id] = l)
+    data.checklists.forEach(cl => checkListsMap[cl.id] = cl)
+    data.customFields.forEach(cf => customFieldsMap[cf.id] = cf)
+
+    data.actions
+        .filter(a => a.type == 'commentCard')
+        .sort((a, b) => new Date(a.date) - new Date(b.date))
+        .forEach(a => {
+            let cardId = a.data.card.id
+            if (!commentsMap[cardId]) commentsMap[cardId] = []
+            commentsMap[cardId].push({
+                date: a.date,
+                member: membersMap[a.idMemberCreator].username,
+                text: a.data.text
+            })
+        })
+        
+    _trelloLists = Object.values(listsMap).map(l => l.name)
+
+    _trelloCards = data.cards
+        .filter(c => listsMap[c.idList] && (config.includeArchivedCards || !c.closed))
+        .map(c => {
+            let simpleCard = {}
+            simpleCard.id = c.id
+            simpleCard.closed = c.closed
+            simpleCard.desc = c.desc
+            simpleCard.labels = c.idLabels.map(id => ({ name: labelsMap[id].name, color: labelsMap[id].color }))
+            simpleCard.list = listsMap[c.idList].name
+            simpleCard.members = c.idMembers.map(id => membersMap[id].username)
+            simpleCard.checklists = c.idChecklists.map(id => ({
+                name: checkListsMap[id].name,
+                items: checkListsMap[id].checkItems.map(ci => ({
+                    name: ci.name,
+                    complete: ci.state === 'complete',
+                })),
+            }))
+            simpleCard.name = c.name
+            simpleCard.shortUrl = c.shortUrl
+            simpleCard.url = c.url
+            simpleCard.attachments = c.attachments.map(a => ({ name: a.name, url: a.url }))
+            // simpleCard.pullRequestLink = c.customFieldItems
+            //     .filter(cfi => cfi.idCustomField === '5f2af029936c550f28d04726')
+            //     .map(cfi => cfi.value?.text)[0]
+            // simpleCard.blockingReason = c.customFieldItems
+            //     .filter(cfi => cfi.idCustomField === '611aaa873e285e88043dc756')
+            //     .map(cfi => cfi.value?.text)[0]
+            simpleCard.comments = commentsMap[c.id] ?? []
+            return simpleCard
+        })
 }
 
-// Optional settings
-const githubOrg = "inoa";
-const githubStatusField = "Status";
-const includeArchivedCards = false;
-const trelloToGithubUserMap = {};
+async function connectToGithub() {
+    const githubPrivateKey = fs.readFileSync(config.githubPrivateKeyFileName, "utf8")
+    const app = new App({ appId: config.githubAppId, privateKey: githubPrivateKey })
+    await app.octokit.rest.apps.getAuthenticated()
+    _octokit = await app.getInstallationOctokit(config.githubInstalationId)
+}
 
-// Authenticate
-const githubAppId = 864042;
-const githubInstalationId = 48947089;
-const githubPrivateKey = fs.readFileSync("private-key.pem", "utf8");
-const app = new App({ appId: githubAppId, privateKey: githubPrivateKey });
-await app.octokit.rest.apps.getAuthenticated();
-const octokit = await app.getInstallationOctokit(githubInstalationId);
-
-const project = (await octokit.graphql(`
-  query {
-    organization(login: "${githubOrg}") {
-      projectV2(number: ${githubProjectNumber}) {
-        id
-        field(name: "${githubStatusField}") {
-          ... on ProjectV2FieldCommon {
-            id
-            name
-          }
-          ... on ProjectV2SingleSelectField {
-            options {
-              id
-              name
+async function loadGithubProject() {
+    let response = await _octokit.graphql(`
+        query {
+            organization(login: "${config.githubOrg}") {
+                projectV2(number: ${config.githubProjectNumber}) {
+                    id
+                    fields(first: 100) {
+                        nodes {
+                            ... on ProjectV2FieldCommon {
+                                id
+                                name
+                            }
+                            ... on ProjectV2SingleSelectField {
+                                options {
+                                    id
+                                    name
+                                }
+                            }
+                        }
+                    }
+                }  
             }
-          }
         }
-      }  
+    `)
+
+    _githubProject = response.organization.projectV2
+    _githubProject.queryFields = {}
+    _githubProject.queryFields[config.githubStatusField] = _githubProject.fields.nodes.filter(f => f.name === config.githubStatusField)[0]
+
+    if (trelloCard.blockingReason && config.githubBlockingReasonField) {
+        _githubProject.queryFields[config.githubBlockingReasonField] = _githubProject.fields.nodes.filter(f => f.name === config.githubBlockingReasonField)[0]
     }
-  }
-`)).organization.projectV2;
+}
 
-const trelloColumns = Object.keys(trelloToGithubColumnMap);
+function loadGithubColumnIds() {
+    _trelloLists.forEach(trelloListName => {
+        let githubColumnName = config.trelloToGithubColumnMap[trelloListName]
+        let githubColumn = _githubProject.queryFields[config.githubStatusField].options.find(o => o.name === githubColumnName)
+        if (!githubColumn) {
+            console.error(`GitHub column not found: ${githubColumnName}`)
+            exit(1)
+        }
+        _trelloListNameTogithubColumnId[trelloListName] = githubColumn.id
+    })
+}
 
-const data = JSON.parse(fs.readFileSync("trello.json", "utf8"));
+async function tryGetGithubIssue(trelloCard, githubRepository) {
+    const searchResult = await _octokit.rest.search.issuesAndPullRequests({
+        q: `repo:${config.githubOrg}/${githubRepository} is:issue author:app/trello-to-github-projects "${trelloCard.name}" in:title`,
+    })
 
-// Map trello list id to github field id
-const columnDictionary = trelloColumns.reduce((acc, trelloColumnName) => {
-  if (!trelloToGithubColumnMap[trelloColumnName]) {
-    console.error("Unexpected error: Trello column not found");
-    exit(1);
-  }
-  const githubColumnName = trelloToGithubColumnMap[trelloColumnName];
+    return searchResult.data.items.find(i => i.body.includes(`- [Trello](${trelloCard.shortUrl})`))
+}
 
-  const trelloList = data.lists.find(l => l.name === trelloColumnName);
-  if (!trelloList) {
-    console.error(`Trello column not found: ${trelloColumnName}`);
-    exit(1);
-  }
+function createChecklistMarkdown(checklist) {
+    const title = `# ${checklist.name}`
+    const checkItems = checklist.items.map(ci =>
+        `- [${ci.complete ? 'x' : ' '}] ${ci.name}`)
 
-  const githubField = project.field.options.find(o => o.name === githubColumnName);
-  if (!githubField) {
+    return `${title}\n${checkItems.join('\n')}`
+}
+
+function parseChecklists(checklists) {
+    if (!checklists || checklists.length === 0) return ''
+    return checklists.map(checklist => createChecklistMarkdown(checklist)).join('\n\n---\n\n')
+}
+
+function trelloUsernameToGithubUsername(username) {
+    return `inoa-${username.replace("_inoa", "")}`
+}
+
+async function createGithubIssue(trelloCard, githubRepository) {
+    let body = ''
+    if (trelloCard.desc.length > 0) {
+      body += `${trelloCard.desc}\n\n---\n\n`
+    }
+    body += `${parseChecklists(trelloCard.checklists)}`
+    body += trelloCard.pullRequestLink || ''
+    body += `- [Trello](${trelloCard.shortUrl})`
+
+    trelloCard.attachments.forEach(attachment => {
+      body += `\n- [${attachment.name}](${attachment.url})`
+    })    
+
+    const issue = await _octokit.rest.issues.create({
+      owner: config.githubOrg,
+      repo: githubRepository,
+      title: trelloCard.name,
+      body: body,
+      assignees: trelloCard.members.map(trelloUsernameToGithubUsername),
+      labels: trelloCard.labels.map(label => label.name),
+    })
+
+    for (c of trelloCard.comments) {
+        await _octokit.rest.issues.createComment({
+            owner: config.githubOrg,
+            repo: githubRepository, //
+            issue_number: issue.data.number,
+            body: `**@${trelloUsernameToGithubUsername(c.member)} em ${c.date}**\n\n>${c.text}`,
+          })
+    }
+
+    return issue.data
+}
+
+async function addGithubIssueToProject(issue) {
+    const response = await _octokit.graphql(`mutation {
+        addProjectV2ItemById(input: {projectId: "${_githubProject.id}" contentId: "${issue.node_id}"}) {
+            item {
+                id
+            }
+        }
+    }`)
+
+    return response.addProjectV2ItemById.item.id
+}
+
+async function setGithubItemStatus(trelloCard, itemId) {
+    const response = await _octokit.graphql(`mutation {
+        updateProjectV2ItemFieldValue(
+            input: {
+                projectId: "${_githubProject.id}"
+                itemId: "${itemId}"
+                fieldId: "${_githubProject.queryFields[config.githubStatusField].id}"
+                value: {
+                    singleSelectOptionId: "${_trelloListNameTogithubColumnId[trelloCard.list]}"
+                }
+            }
+            ) {
+                projectV2Item {
+                    fieldValueByName(name: "${config.githubStatusField}") {
+                    ... on ProjectV2ItemFieldSingleSelectValue {
+                        name
+                    }
+                }
+            }
+        }
+    }`)
+
+    return response.updateProjectV2ItemFieldValue.projectV2Item.fieldValueByName.name
+}
+
+async function setGithubItemBlockingReason(trelloCard, itemId) {
+    const response = await _octokit.graphql(`mutation {
+        updateProjectV2ItemFieldValue(
+            input: {
+                projectId: "${_githubProject.id}"
+                itemId: "${itemId}"
+                fieldId: "${_githubProject.queryFields[config.githubBlockingReasonField].id}"
+                value: {
+                    text: "${trelloCard.blockingReason}"
+                }
+            }
+            ) {
+                projectV2Item {
+                    fieldValueByName(name: "${config.githubBlockingReasonField}") {
+                    ... on ProjectV2ItemFieldTextValue {
+                        text
+                    }
+                }
+            }
+        }
+    }`)
+
+    return response.updateProjectV2ItemFieldValue.projectV2Item.fieldValueByName.name
+}
+
+async function migrate() {
+    for (let trelloCard of _trelloCards) {
+        // lógica para selecionar o repositório
+        // let trelloRepository = config.githubRepositoryMapByListOrLabel[trelloCard.list]
+        //     ? trelloCard.list
+        //     : trelloCard.labels[0].name
+        // let githubRepository = config.githubRepositoryMapByListOrLabel[trelloRepository]
+
+        let issue = await tryGetGithubIssue(trelloCard, githubRepository)
     
-    console.error(`GitHub column not found: ${githubColumnName}`);
-    exit(1);
-  }
-
-  acc[trelloList.id] = githubField.id;
-  return acc;
-}, {});
-
-// Map member id in trello to github username
-const userDictionary = data.members.reduce((acc, member) => {
-  if (trelloToGithubUserMap[member.username]) {
-    acc[member.id] = trelloToGithubUserMap[member.username];
-    return acc;
-  }
-
-  acc[member.id] = `inoa-${member.username.replace("_inoa", "")}`;
-  return acc;
-}, {});
-
-const checklists = {
-  _: data.checklists,
-  findById: function (id) { return this._.find(c => c.id === id) },
-}
-
-const cards = data.cards
-  .filter(card => Object.keys(columnDictionary).includes(card.idList))
-  .filter(card => {
-    if (includeArchivedCards) return true;
-
-    return card.closed === false;
-  });
-
-cards.forEach(async card => {
-  let issue = await tryGetIssue(card);
-  if (issue) {
-    console.log(`Issue #${issue.number} used for card '${card.name}'.`);
-  }
-
-  if (!issue) {
-    issue = await createIssue(card);
-    console.log(`Issue #${issue.number} created for card '${card.name}'.`);
-  }
-
-  const itemId = await addIssueToProject(issue);
-  console.log(`Issue #${issue.number} added to project. (${itemId})`);
-
-  const status = await setItemStatus(card, itemId);
-  console.log(`Issue #${issue.number} status updated to '${status}'.`);
-});
-
-// Functions
-
-async function tryGetIssue(card) {
-  const searchResult = await octokit.rest.search.issuesAndPullRequests({
-    q: `repo:${githubOrg}/${githubRepository} is:issue author:app/trello-to-github-projects "${card.name}" in:title`,
-  });
-
-  return searchResult.data.items.find(i => i.body.includes(`- [Trello](${card.shortUrl})`));
-}
-
-async function createIssue(card) {
-  let body = '';
-  if (card.desc.length > 0) {
-    body += `${card.desc}\n\n---\n\n`;
-  }
-  body += `${createChecklists(card)}`
-  body += `- [Trello](${card.shortUrl})`;
-  card.attachments.forEach(attachment => {
-    body += `\n- [${attachment.name}](${attachment.url})`;
-  });
-
-  const issue = await octokit.rest.issues.create({
-    owner: githubOrg,
-    repo: githubRepository,
-    title: card.name,
-    body: body,
-    assignees: card.idMembers.map(id => userDictionary[id]),
-    labels: card.labels.map(label => label.name).filter(label => label !== "GitHub"),
-  });
-
-  // Add comments
-  data.actions
-    .filter(action => action.type === "commentCard" && action.data.card.id === card.id)
-    .map(action => ({ memberId: action.memberCreator.id, text: action.data.text, date: action.date }))
-    .sort((a, b) => new Date(a.date) - new Date(b.date))
-    .forEach(async c => {
-      await octokit.rest.issues.createComment({
-        owner: githubOrg,
-        repo: githubRepository,
-        issue_number: issue.data.number,
-        body: `**@${userDictionary[c.memberId]} em ${c.date}**\n\n>${c.text}`,
-      })
-    });
-
-  return issue.data;
-}
-
-async function addIssueToProject(issue) {
-  const response = await octokit.graphql(`mutation {
-    addProjectV2ItemById(input: {projectId: "${project.id}" contentId: "${issue.node_id}"}) {
-      item {
-        id
-      }
-    }
-  }`);
-  
-  return response.addProjectV2ItemById.item.id;
-}
-
-async function setItemStatus(card, itemId) {
-  const response = await octokit.graphql(`mutation {
-    updateProjectV2ItemFieldValue(
-      input: {
-        projectId: "${project.id}"
-        itemId: "${itemId}"
-        fieldId: "${project.field.id}"
-        value: {
-          singleSelectOptionId: "${columnDictionary[card.idList]}"
+        if (issue) {
+            console.log(`Issue #${issue.number} used for card '${trelloCard.name}'.`)
         }
-      }
-    ) {
-      projectV2Item {
-        fieldValueByName(name: "${githubStatusField}") {
-          ... on ProjectV2ItemFieldSingleSelectValue {
-            name
-          }
+
+        if (!issue) {
+            issue = await createGithubIssue(trelloCard, githubRepository)
+            console.log(`Issue #${issue.number} created for card '${trelloCard.name}'.`)
         }
-      }
+
+        const itemId = await addGithubIssueToProject(issue)
+        console.log(`Issue #${issue.number} added to project. (${itemId})`)
+
+        const status = await setGithubItemStatus(trelloCard, itemId)
+        console.log(`Issue #${issue.number} status updated to '${status}'.`)
+
+        if (trelloCard.blockingReason && config.githubBlockingReasonField) {
+            const blockingReason = await setGithubItemBlockingReason(trelloCard, itemId)
+            console.log(`Issue #${issue.number} blockingReason updated to '${blockingReason}'.`)
+        }
     }
-  }`);
-
-  return response.updateProjectV2ItemFieldValue.projectV2Item.fieldValueByName.name;
 }
 
-function createMarkdownChecklist(checklist) {
-  const title = `# ${checklist.name}`
-  const checkItems = checklist?.checkItems.map(ci =>
-    `- [${ci.state === 'complete' ? 'x' : ' '}] ${ci.name}`)
-  
-  return `${title}\n${checkItems.join('\n')}`
-}
-
-function createChecklists(card) {
-  const lists = card.idChecklists
-    .map(id => checklists.findById(id))
-    .map(checklist => createMarkdownChecklist(checklist))
-
-  lists.length && lists.push('')
-
-  return lists.join('\n\n---\n\n')
-}
+Promise.resolve()
+    .then(() => loadTrelloListsAndCardsFromJson())
+    .then(() => connectToGithub())
+    .then(() => loadGithubProject())
+    .then(() => loadGithubColumnIds())
+    .then(() => migrate())
