@@ -10,16 +10,19 @@ npm i
 
 ## Configurações
 
-As configurações do script de migração estão no topo do arquivo `main.js`.
+As configurações de migração estão no arquivo `config.js`.
 
-### Nome do repositório
+### Nome do repositório padrão
 
-Por enquanto, este script suporta somente um repositório.
+Quando o script não conseguir definir em qual repositório do GitHub criar a issue, a issue será criada no repositório definido.
 
 Exemplo:
 
 ```js
-const githubRepository = "cashier";
+{
+  // ...
+  githubDefaultRepository: "cashier",
+}
 ```
 
 ### Número do projeto
@@ -29,7 +32,10 @@ Para saber o número do projeto em que as issues serão adicionadas, abra o proj
 Exemplo:
 
 ```js
-const githubProjectNumber = 22; // Número do projeto de Finantial Solutions
+{
+  // ...
+  githubProjectNumber: 22, // Número do projeto de 'Finantial Solutions'
+}
 ```
 
 ### Mapear colunas do Trello para colunas do GitHub Project
@@ -39,9 +45,12 @@ No exemplo a seguir, os cards na lista "Doing" no Trello serão inseridos com st
 É recomendável rodar o script 1 coluna por vez. Assim, é mais fácil de acompanhar as mudanças e resolver erros eventuais.
 
 ```js
-const trelloToGithubColumnMap = {
-  "Doing": "In Progress",
-  "Done": "Done",
+{
+  // ...
+  trelloToGithubColumnMap: {
+    "Doing": "In Progress",
+    "Done": "Done",
+  },
 }
 ```
 
@@ -55,29 +64,49 @@ A maioria dos projetos criados no GitHub possuem um board onde as colunas são d
 Exemplo:
 
 ```js
-const githubStatusField = "My status";
+{
+  // ...
+  githubStatusField: "My status",
+}
 ```
 
 ### Incluir cards arquivados (opcional)
 
 Altere a variável
 ```js
-const includeArchivedCards = true;
-```
-
-### Mapear usuários Trello para usuários GitHub (opcional)
-
-Se o nome dos usuários seguir o padrão da Inoa, não é necessário alterar esta configuração.
-
-Exemplo: `mgsimao_inoa` será automaticamente convertido para `inoa-mgsimao`.
-
-Caso contrário, alterar a seguinte configuração, onde as chaves são o usuário no Trello e os valores são o usuário no GitHub.
-
-```js
-const trelloToGithubUserMap = {
-    "mgsimao1_inoa": "inoa-mgsimao",
+{
+  // ...
+  includeArchivedCards: true,
 }
 ```
+
+### Mapeamento de repositórios (opcional)
+
+Caso o board no Trello envolva mais de um repositório no GitHub, o repositório onde a issue será criada pode variar.
+
+Nesse caso, é possível mapear o nome de uma coluna ou label no Trello para um repositório no GitHub.
+
+Exemplo:
+
+```js
+{
+  // ...
+  githubRepositoryMapByListOrLabel: {
+    "WI": "infra-tech-bt-main",
+    "A2": "infra-tech-bt-main",
+    "AU": "infra-tech-bt-main",
+    "SC": "infra-tech-bt-main",
+    "NO": "infra-tech-bt-main",
+    "IDX": "indexer",
+    "AKI": "akinori",
+    "HD": "inoa.helpdesk",
+  },
+}
+```
+
+O script primeiro verificará se a coluna do card do Trello está mapeada para algum repositório.
+Caso contrário, verificará a primeira label.
+Por último, utilizará o repositório padrão definido.
 
 ## Credenciais
 
