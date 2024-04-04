@@ -65,12 +65,6 @@ function loadTrelloListsAndCardsFromJson() {
             simpleCard.shortUrl = c.shortUrl
             simpleCard.url = c.url
             simpleCard.attachments = c.attachments.map(a => ({ name: a.name, url: a.url }))
-            // simpleCard.pullRequestLink = c.customFieldItems
-            //     .filter(cfi => cfi.idCustomField === '5f2af029936c550f28d04726')
-            //     .map(cfi => cfi.value?.text)[0]
-            // simpleCard.blockingReason = c.customFieldItems
-            //     .filter(cfi => cfi.idCustomField === '611aaa873e285e88043dc756')
-            //     .map(cfi => cfi.value?.text)[0]
             simpleCard.comments = commentsMap[c.id] ?? []
             return simpleCard
         })
@@ -111,10 +105,6 @@ async function loadGithubProject() {
     _githubProject = response.organization.projectV2
     _githubProject.queryFields = {}
     _githubProject.queryFields[config.githubStatusField] = _githubProject.fields.nodes.filter(f => f.name === config.githubStatusField)[0]
-
-    if (trelloCard.blockingReason && config.githubBlockingReasonField) {
-        _githubProject.queryFields[config.githubBlockingReasonField] = _githubProject.fields.nodes.filter(f => f.name === config.githubBlockingReasonField)[0]
-    }
 }
 
 function loadGithubColumnIds() {
@@ -225,38 +215,13 @@ async function setGithubItemStatus(trelloCard, itemId) {
     return response.updateProjectV2ItemFieldValue.projectV2Item.fieldValueByName.name
 }
 
-async function setGithubItemBlockingReason(trelloCard, itemId) {
-    const response = await _octokit.graphql(`mutation {
-        updateProjectV2ItemFieldValue(
-            input: {
-                projectId: "${_githubProject.id}"
-                itemId: "${itemId}"
-                fieldId: "${_githubProject.queryFields[config.githubBlockingReasonField].id}"
-                value: {
-                    text: "${trelloCard.blockingReason}"
-                }
-            }
-            ) {
-                projectV2Item {
-                    fieldValueByName(name: "${config.githubBlockingReasonField}") {
-                    ... on ProjectV2ItemFieldTextValue {
-                        text
-                    }
-                }
-            }
-        }
-    }`)
-
-    return response.updateProjectV2ItemFieldValue.projectV2Item.fieldValueByName.name
-}
-
 async function migrate() {
     for (let trelloCard of _trelloCards) {
         // lógica para selecionar o repositório
-        // let trelloRepository = config.githubRepositoryMapByListOrLabel[trelloCard.list]
-        //     ? trelloCard.list
-        //     : trelloCard.labels[0].name
-        // let githubRepository = config.githubRepositoryMapByListOrLabel[trelloRepository]
+        let trelloRepository = config.githubRepositoryMapByListOrLabel[trelloCard.list]
+            ? trelloCard.list
+            : trelloCard.labels[0]?.name
+        let githubRepository = config.githubRepositoryMapByListOrLabel[trelloRepository] ?? config.githubDefaultRepository;
 
         let issue = await tryGetGithubIssue(trelloCard, githubRepository)
     
@@ -274,11 +239,6 @@ async function migrate() {
 
         const status = await setGithubItemStatus(trelloCard, itemId)
         console.log(`Issue #${issue.number} status updated to '${status}'.`)
-
-        if (trelloCard.blockingReason && config.githubBlockingReasonField) {
-            const blockingReason = await setGithubItemBlockingReason(trelloCard, itemId)
-            console.log(`Issue #${issue.number} blockingReason updated to '${blockingReason}'.`)
-        }
     }
 }
 
