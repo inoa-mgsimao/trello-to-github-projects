@@ -37,7 +37,7 @@ function loadTrelloListsAndCardsFromJson() {
             if (!commentsMap[cardId]) commentsMap[cardId] = []
             commentsMap[cardId].push({
                 date: a.date,
-                member: membersMap[a.idMemberCreator].username,
+                member: membersMap[a.idMemberCreator]?.username,
                 text: a.data.text
             })
         })
@@ -141,6 +141,8 @@ function parseChecklists(checklists) {
 }
 
 function trelloUsernameToGithubUsername(username) {
+    if (!username) return ' unknwon';
+
     return `inoa-${username.replace("_inoa", "")}`
 }
 
@@ -166,7 +168,7 @@ async function createGithubIssue(trelloCard, githubRepository) {
       labels: trelloCard.labels.map(label => label.name),
     })
 
-    for (c of trelloCard.comments) {
+    for (const c of trelloCard.comments) {
         await _octokit.rest.issues.createComment({
             owner: config.githubOrg,
             repo: githubRepository, //
