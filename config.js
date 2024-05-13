@@ -8,6 +8,10 @@ export default {
     // Optional settings
     githubStatusField: "Status",
     includeArchivedCards: false,
+    trelloToGithubUsersMap: {
+        //To be used if removing _inoa and adding inoa- prefix is not enough
+        // Trello assignee username : Github username
+    },
     githubRepositoryMapByListOrLabel: {
         // Trello list or label name : Github repository name
     },

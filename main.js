@@ -142,7 +142,8 @@ function parseChecklists(checklists) {
 
 function trelloUsernameToGithubUsername(username) {
     if (!username) return ' unknwon';
-
+    if (config.trelloToGithubUsersMap && config.trelloToGithubUsersMap[username])
+        return config.trelloToGithubUsersMap[username];
     return `inoa-${username.replace("_inoa", "")}`
 }
 
